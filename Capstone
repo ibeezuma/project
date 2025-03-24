@@ -1,0 +1,269 @@
+#-------------------------------------------------------------------------------
+# Name:        Declan Cooper-Smith
+# Purpose:     FTA Capstone
+#
+#
+# Created:     28/06/2023
+# Finalized:   14/08/2023
+#-------------------------------------------------------------------------------
+
+## Imports arcpy, sets workspace and allows overwriting
+import arcpy
+
+
+print("Setting up workspace and overwriting permissions...")
+
+workspace = arcpy.env.workspace= r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb"
+arcpy.env.overwriteOutput = True
+
+print("Checking out spatial extension and setting coordinate system...")
+
+## Checks out spatial extension and sets coordinate system
+arcpy.CheckOutExtension("Spatial")
+arcpy.env.outputCoordinateSystem = arcpy.SpatialReference("NAD 1983 UTM Zone 11N")
+
+DEM = arcpy.GetParameterAsText(0)
+Trail_Examples = arcpy.GetParameterAsText(1)
+
+print("Defining trail rating system schema...")
+
+## Defines scheme for each component of trail rating system. Each number represents the MINIMUM value for each class
+Ratings = [[0, "White"], [1, "Green"], [2,"Blue"], [3, "Black Diamond"], [4, "Double Black Diamond"], [5, "Pro Line"]]
+MaxGrade = [[0, "White", 0], [8, "Green", 1], [15, "Blue", 2], [25, "Black Diamond", 3], [30, "Double Black Diamond", 4], [100, "Pro Line", 5]]
+AvgGrade = [[0, "White", 0], [2, "Green", 1], [5, "Blue", 2], [8, "Black Diamond", 3], [12, "Double Black Diamond", 4], [15, "Pro Line", 5]]
+ClimbSusGrade = [[0, "White", 0], [5, "Green", 1], [8, "Blue", 2], [12, "Black Diamond", 3], [20, "Double Black Diamond", 4], [30, "Pro Line", 5]]
+DescSusGrade = [[0, "White", 0], [5, "Green", 1], [15, "Blue", 2], [20, "Black Diamond", 3], [25, "Double Black Diamond", 4], [30, "Pro Line", 5]]
+
+
+print("Initializing lists for data processing...")
+
+## Empty lists for later use
+Trails = []
+
+SlopeList = []
+ElevList = []
+
+ParentSlopeList = []
+ParentElevList = []
+
+TempRatings = []
+ParentTempRatings = []
+FinalRatings = []
+
+print("Starting the main processing steps...")
+
+## Function which will be called to check if all values in a list are above a certain threshold
+def check(ResultList, val):
+    return(all(p > val for p in ResultList))
+
+print("Creating slope data...")
+
+## Creates slope in degrees
+DegSlope = arcpy.sa.Slope("DEM","DEGREE")
+DegSlope.save("DegSlope")
+
+
+
+## Converts slope into an integer
+IntSlope = arcpy.sa.Int("DegSlope")
+IntSlope.save("IntSlope")
+
+print("Converting DEM to integer...")
+
+## Converts DEM into an integer
+IntDEM = arcpy.sa.Int("DEM")
+IntDEM.save("IntDEM")
+
+print("Converting DEM and slope to polygons...")
+
+## Converts DEM and Slope into polygons
+arcpy.conversion.RasterToPolygon("IntSlope", "SlopePolygon", "NO_SIMPLIFY")
+arcpy.conversion.RasterToPolygon("IntDEM", "DEMPolygon", "NO_SIMPLIFY")
+
+print("Deleting trails featureclass...")
+
+## Delets trails feature class and creates new one
+arcpy.management.Delete(r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb\Trail_Ratings")
+arcpy.management.Delete(r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb\Trails")
+arcpy.management.CreateFeatureDataset("", "Trails")
+
+print("Deleting and recreating Valname field...")
+
+## Deletes and recreates ValName (validated name field)
+arcpy.management.DeleteField("Trail_Examples", "ValName")
+arcpy.management.AddField("Trail_Examples", "ValName", "TEXT")
+
+print("Fixing bad trail names...")
+
+## Creates a validated version of the trail name (i.e. removes problematic characters such as dashes)
+namecursor = arcpy.da.UpdateCursor("Trail_Examples", ["name", "ValName"])
+for row in namecursor:
+    valname = arcpy.ValidateFieldName(row[0])
+    row[1] = valname
+    namecursor.updateRow(row)
+
+## Splits trails into separate feature classes
+arcpy.analysis.SplitByAttributes("Trail_Examples", r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb\Trails", "name")
+
+## Generates points along trails and deletes trails
+arcpy.env.workspace= r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb\Trails"
+fclist = arcpy.ListFeatureClasses()
+for fc in fclist:
+    Trails.append(fc)
+    arcpy.management.GeneratePointsAlongLines(fc, fc + "_Points","By Distance", "0.5 Meters")
+    arcpy.management.Delete(fc)
+
+## Intersects points with slope and deletes original points
+fclist = arcpy.ListFeatureClasses()
+for fc in fclist:
+    print(fc)
+    arcpy.analysis.Intersect([fc, r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb\SlopePolygon"], fc + "_Slope")
+    arcpy.management.Delete(fc)
+
+## Intersects points with elevation and deletes original points
+fclist = arcpy.ListFeatureClasses()
+for fc in fclist:
+    print(fc)
+    arcpy.analysis.Intersect([fc, r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb\DEMPolygon"], fc + "_Elev")
+    arcpy.management.Delete(fc)
+
+## Appends slope and elevation data to a list for each trail then appends each list to a list of lists. Then, statistics are generated for MAX and MIN slope
+fclist = arcpy.ListFeatureClasses()
+for fc in fclist:
+    slopesc = arcpy.da.SearchCursor(fc, ["gridcode","gridcode_1"])
+    for row in slopesc:
+        SlopeList.append(row[0])
+        ElevList.append(row[1])
+    ParentSlopeList.append(SlopeList)
+    ParentElevList.append(ElevList)
+    SlopeList = []
+    arcpy.analysis.Statistics(fc, r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb\\" + fc + "_Stats", [["gridcode", "MAX"],["gridcode", "MEAN"]])
+
+arcpy.env.workspace= r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb"
+
+
+## For every trail, for both sustained uphill and downhill grade in the first direction, creates a moving window of slopes (starting at points 1-30) and checks to see if ALL values in the moving window are above the threshold for a given trail rating. It uses negative indexing, starting with the hardest rating (Pro Line) and descending to the easiest (White). Another condition is that for sustained uphill grade, the elevation of point 1 in the window must be less than the elevation of point 30. The opposite is true for sustained downhill grade.
+## The same step is repeated for the second direction. The difference is the window moves backwards.
+
+## 'n' is the identifier for each trail and refers to the list of trails. Starts with 0 and ascends
+n = -1
+tablelist = arcpy.ListTables()
+for table in tablelist:
+    n += 1
+    print("\n")
+    scursor = arcpy.da.SearchCursor(table, ["MAX_gridcode", "MEAN_gridcode"]) ## Searches statistics table for Max and Avg slope
+    for row in scursor:
+        print(Trails[n]) ## prints trail name
+        ## 'x' refers to the rating and uses negative indexing. It begins with -1 (Pro Line) and works its way backwards until it lands on an appropriate rating.
+        x = -1
+        while x < 0:
+            if row[0] > MaxGrade[x][0]: ## if max grade is greater than the criteria for that rating
+                print("The maximum grade gives this trail a rating of", MaxGrade[x][1])
+                TempRatings.append(MaxGrade[x][2]) ## Appends rating to list of temporary ratings
+                x = 0 ## Breaks loop
+            else:
+                x = x - 1 ## Moves down to next rating
+        x = -1
+        while x < 0:
+            if row[0] > AvgGrade[x][0]: ## if avg grade is greater than the criteria for that rating
+                print("The average grade gives this trail a rating of", MaxGrade[x][1])
+                TempRatings.append(AvgGrade[x][2]) ## Appends rating to list of temporary ratings
+                x = 0 ## Breaks loop
+            else:
+                x = x - 1 ## Moves down to next rating
+
+    SlopeLength = len(ParentSlopeList[n]) ## Calculates number of points for each trail
+
+    ## 'x' refers to the rating and uses negative indexing. It begins with -1 (Pro Line) and works its way backwards until it lands on an appropriate rating.
+    ## 'y' refers to the first position in the moving window.
+    x = 0
+    while x < 1: ## Ensures a valid rating level is being assessed
+        x -= 1
+        y = -1
+        while y >= -1 and y < (SlopeLength - 30): ## Ensures the moving window does not go beyond the extent
+            y += 1
+            Range1 = range(y, y + 29) ## Creates range for moving window
+            ResultList = [ParentSlopeList[n][i] for i in Range1] ## Creates moving window
+            val = ClimbSusGrade[x][0] ## Threshold for moving window, from criteria list
+            if(check(ResultList, val)) and ParentElevList[n][y] < ParentElevList[n][y + 29]: ## If threshold is met and slope is uphill
+                print("The sustained climbing grade (Dir. 1) gives this trail a rating of",ClimbSusGrade[x][1])
+                TempRatings.append(ClimbSusGrade[x][2]) ## Appends rating to list of temporary ratings
+                x = 1 ## Breaks Loop
+                y = -2 ## Breaks Loop
+
+    x = 0
+    while x < 1: ## Ensures a valid rating level is being assessed
+        x -= 1
+        y = SlopeLength
+        while y >= 30: ## Ensures the moving window does not go beyond the extent
+            y -= 1
+            range1 = range(y - 29, y) ## Creates range for moving window
+            ResultList = [ParentSlopeList[n][i] for i in range1] ## Creates moving window
+            val = ClimbSusGrade[x][0] ## Threshold for moving window, from criteria list
+            if(check(ResultList, val)) and ParentElevList[n][y] < ParentElevList[n][y - 29]: ## If threshold is met and slope is uphill
+                print("The sustained climbing grade (Dir. 2) gives this trail a rating of",ClimbSusGrade[x][1])
+                TempRatings.append(ClimbSusGrade[x][2]) ## Appends rating to list of temporary ratings
+                x = 1 ## Breaks Loop
+                y = -2 ## Breaks Loop
+
+    x = 0
+    while x < 1: ## Ensures a valid rating level is being assessed
+        x -= 1
+        y = -1
+        while y >= -1 and y < (SlopeLength - 30): ## Ensures the moving window does not go beyond the extent
+            y += 1
+            range1 = range(y, y + 29) ## Creates range for moving window
+            ResultList = [ParentSlopeList[n][i] for i in range1] ## Creates moving window
+            val = DescSusGrade[x][0] ## Threshold for moving window, from criteria list
+            if(check(ResultList, val)) and ParentElevList[n][y] > ParentElevList[n][y + 29]: ## If threshold is met and slope is downhill
+                print("The sustained descending grade (Dir. 1) gives this trail a rating of",DescSusGrade[x][1])
+                TempRatings.append(DescSusGrade[x][2]) ## Appends rating to list of temporary ratings
+                x = 1 ## Breaks Loop
+                y = -2 ## Breaks Loop
+
+
+    x = 0
+    while x < 1: ## Ensures a valid rating level is being assessed
+        x -= 1
+        y = SlopeLength
+        while y >= 30: ## Ensures the moving window does not go beyond the extent
+            y -= 1
+            range1 = range(y - 29, y) ## Creates range for moving window
+            ResultList = [ParentSlopeList[n][i] for i in range1] ## Creates moving window
+            val = DescSusGrade[x][0] ## Threshold for moving window, from criteria list
+            if(check(ResultList, val)) and ParentElevList[n][y] > ParentElevList[n][y - 29]: ## If threshold is met and slope is downhill
+                print("The sustained descending grade (Dir. 2) gives this trail a rating of",DescSusGrade[x][1])
+                TempRatings.append(DescSusGrade[x][2]) ## Appends rating to list of temporary ratings
+                x = 1 ## Breaks Loop
+                y = -2 ## Breaks Loop
+
+    TempRatings.sort() ## Sorts all 6 temporary ratings from smallest to larget
+    FinalRatings.append(Ratings[TempRatings[3]][1]) ## Selects only third highest rating as final rating and appends to a list of final ratings for all trails
+    TempRatings = []
+
+Result = [list(l) for l in zip(Trails, FinalRatings)] ## zips together Trail names and their ratings
+print("\n")
+
+for i in Result:
+    print(i)
+
+
+workspace = arcpy.env.workspace= r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb"
+
+out_path = r"C:\Users\ibeez\Desktop\Capstone\ibe\Rasters.gdb"
+out_name = "Trail_Ratings"
+
+# Run CreateTable
+arcpy.management.CreateTable(out_path, out_name) ## Creates new table for trail ratings
+
+arcpy.management.AddField("Trail_Ratings", "Name", "TEXT") ## Adds field for trail name
+arcpy.management.AddField("Trail_Ratings", "Rating", "TEXT") ## Adds field for rating
+
+with arcpy.da.InsertCursor("Trail_Ratings", ["Name", "Rating"]) as cursor: ## Inserts data into table
+    for i in Result:
+        cursor.insertRow(i)
+
+arcpy.management.CopyFeatures("Trail_Examples", "FINALRATING")  ## Copies original trail table
+arcpy.management.JoinField("FINALRATING", "ValName", "Trail_Ratings", "TrailName") ## Joins copy of original table to table of trail ratings
+arcpy.management.DeleteField("FINALRATING", ["name", "Rating"], "KEEP_FIELDS") ## Deletes all auxilary fields so only trail name and rating remain
+Trail_Examples_Joined = arcpy.management.AddJoin(in_layer_or_view="Trail_Examples", in_field="name", join_table="FINALRATING", join_field="name",join_type="KEEP_COMMON", index_join_fields="NO_INDEX_JOIN_FIELDS", rebuild_index="NO_REBUILD_INDEX")
