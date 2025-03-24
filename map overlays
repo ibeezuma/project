@@ -1,0 +1,122 @@
+'''
+Author: Ibe Ezuma
+Date:   October 18, 2023
+Purpose: Geo processing for map overlays
+'''
+
+#  import Modules
+
+print ("importing modules. . .")
+import arcpy, os,sys
+
+#  Set up path variables
+root = sys.path[0]
+literalPath=r"C:\Users\ibeez\Desktop\GEOS456\pythonProject"
+gdb=os.path.join(root, "Assignment02_Data")
+
+#  Set environments (workspace, overwriteOutput)
+arcpy.env.workspace = gdb
+arcpy.env.overwriteOutput = True
+
+#  creating file geodatabase
+print ("creating file geodatabase. . .")
+arcpy.CreateFileGDB_management(gdb,"Assignment02.gdb","CURRENT")
+
+#  Setting Spatial reference
+sr=arcpy.SpatialReference(4269)
+
+#  Creating feature datasets
+print ("creating feature datasets. . .")
+arcpy.CreateFeatureDataset_management("Assignment02.gdb","Base",sr)
+arcpy.CreateFeatureDataset_management("Assignment02.gdb","Fire",sr)
+
+#  Selecting boundary and exporting
+print ("selecting boundary and exporting. . .")
+arcpy.Select_analysis("IndianReserves",os.path.join(gdb,"Assignment02.gdb","Base", "ReserveBndry"), "NGLSHNM = 'NICOLA MAMEET 1'")
+
+#  Merging
+print ("merging. . .")
+arcpy.Merge_management(["Highways","SideRoads"],"Roads")
+
+#  Exporting selected features
+print ("exporting selected features. . .")
+for f in arcpy.ListFeatureClasses():
+
+    fc = arcpy.SelectLayerByLocation_management(f, "INTERSECT",os.path.join(gdb,"Assignment02.gdb","Base", "ReserveBndry"), None, "NEW_SELECTION", "NOT_INVERT")
+
+    if f == "FirePoints.shp":
+
+        arcpy.FeatureClassToFeatureClass_conversion(fc,os.path.join(gdb, "Assignment02.gdb", "Fire"),"{}".format(f))
+
+    elif f == "FirePolys.shp":
+
+        arcpy.FeatureClassToFeatureClass_conversion(fc,os.path.join(gdb, "Assignment02.gdb", "Fire"), "{}".format(f))
+    else:
+
+        arcpy.FeatureClassToFeatureClass_conversion(fc,os.path.join(gdb, "Assignment02.gdb", "Base"),"{}".format(f))
+
+
+
+#  Joining field
+print ("joining field. . .")
+in_table=os.path.join(gdb,"Assignment02.gdb","Fire","FirePolys")
+join_table=os.path.join(gdb,"Assignment02.gdb","Fire","FirePoints")
+arcpy.JoinField_management(in_table,"FIRE_NUM",join_table,"FIRE_NUM","CAUSE")
+
+print(arcpy.GetMessage(-1))
+
+#  Adding field
+print ("adding field. . .")
+in_table=os.path.join(gdb,"Assignment02.gdb","Fire","FirePolys")
+arcpy.AddField_management(in_table,"GEN_CAUSE","TEXT")
+arcpy.AddField_management(in_table,"SOURCE","TEXT")
+
+# Updating field using cursor
+print ("updating field using cursor. . .")
+with arcpy.da.UpdateCursor(in_table,["CAUSE","GEN_CAUSE"]) as cursor:
+    for row in cursor:
+        if row[0]== "Unknown":
+            row[1]="U"
+            cursor.updateRow(row)
+
+
+with arcpy.da.UpdateCursor(in_table,["CAUSE","GEN_CAUSE"]) as cursor:
+    for row in cursor:
+        if row[0]== "Person":
+            row[1]="P"
+            cursor.updateRow(row)
+
+
+with arcpy.da.UpdateCursor(in_table,["CODE","SOURCE"]) as cursor:
+    for row in cursor:
+        if row[0]== "JA70003000":
+            row[1]="Hand Sketch"
+            cursor.updateRow(row)
+
+
+with arcpy.da.UpdateCursor(in_table,["CODE","SOURCE"]) as cursor:
+    for row in cursor:
+        if row[0]== "JA70003001":
+            row[1]="Hand Sketch"
+            cursor.updateRow(row)
+
+
+with arcpy.da.UpdateCursor(in_table,["CODE","SOURCE"]) as cursor:
+    for row in cursor:
+        if row[0]== "JA70003002":
+            row[1]="GPS"
+            cursor.updateRow(row)
+
+
+with arcpy.da.UpdateCursor(in_table,["CODE","SOURCE"]) as cursor:
+    for row in cursor:
+        if row[0]== "JA70003003":
+            row[1]="KML"
+            cursor.updateRow(row)
+
+
+#  Deleting unwanted files
+print ("deleting unwanted files. . .")
+arcpy.Delete_management(os.path.join(gdb,"Assignment02.gdb","Base", "IndianReserves"))
+arcpy.Delete_management(os.path.join(gdb,"Assignment02.gdb","Base", "Highways"))
+arcpy.Delete_management(os.path.join(gdb,"Assignment02.gdb","Base", "SideRoads"))
