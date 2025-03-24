@@ -1,0 +1,99 @@
+'''
+Author: Ibe Ezuma
+Date:   October 28, 2023
+Purpose:  Spatial Decisions Using Raster Datasets
+'''
+
+#  Import Modules
+
+print ("importing modules. . .")
+import arcpy, os,sys
+from arcpy.sa import *
+from arcpy.ia import *
+
+#  Set up path variables
+
+root = sys.path[0]
+literalPath=r"C:\Users\ibeez\Desktop\GEOS456\pythonProject\Assignment04"
+gdb=os.path.join(root, "Assignment04_Data")
+
+
+#  creating file geodatabase
+print ("creating file geodatabase. . .")
+arcpy.CreateFileGDB_management(gdb,"Assignment04.gdb","CURRENT")
+
+#  Set environments (workspace, overwriteOutput)
+arcpy.env.workspace = os.path.join(gdb,"Spatial_Decisions.gdb")
+arcpy.env.overwriteOutput = True
+
+#  creating raster
+print ("creating raster. . .")
+
+dem=Raster("dem")
+print("The Data format is",dem.format)
+print("The mean cell height is",dem.meanCellHeight,"m")
+print("The mean cell width is",dem.meanCellWidth,"m")
+print("The Coordinate System is",dem.spatialReference.name)
+
+inras =Raster("dem")
+where="VALUE >= 1000 AND VALUE<=1550"
+outras= Con(inras,1,"", where)
+outras.save(os.path.join(gdb,"Assignment04.gdb","ElevationCriteria"))
+
+outras=Slope("dem")
+outras.save(os.path.join(gdb,"Assignment04.gdb","Slope"))
+
+
+slope=Slope("dem")
+where="VALUE<=18"
+outras= Con(slope,1,"", where)
+outras.save(os.path.join(gdb,"Assignment04.gdb","SlopeCriteria"))
+
+inras=Raster("geolgrid")
+where="VALUE=7"
+outras= Con(inras,1,"", where)
+outras.save(os.path.join(gdb,"Assignment04.gdb","GeologyCriteria"))
+
+arcpy.env.workspace = os.path.join(gdb,"Assignment04.gdb")
+r1 = arcpy.Raster("ElevationCriteria")
+r2 = arcpy.Raster("SlopeCriteria")
+r3 = arcpy.Raster("GeologyCriteria")
+outras = r1+r2+r3
+outras.save("FinalCriteria")
+
+#Incorporate the wshds2c feature class with the slope using Zonal Stats as Table
+
+arcpy.ia.ZonalStatisticsAsTable("FinalCriteria", "VALUE","FinalCriteria","tblZonalStats")
+
+with arcpy.da.SearchCursor("tblZonalStats", ["COUNT", "AREA"])as cursor:
+    for row in cursor:
+        print("The Number of cells for FinalCriteria",row[0])
+        print("The Area in square metres for FinalCriteria is",row[1])
+
+
+arcpy.ia.ZonalStatisticsAsTable("FinalCriteria", "VALUE",os.path.join(gdb,"Spatial_Decisions.gdb", "dem"),"tblZonalStats2","", "MEAN")
+
+cursor = arcpy.da.SearchCursor("tblZonalStats2", "MEAN")
+for row in cursor:
+    print("The Average elevation for FinalCriteria in metres is",row[0])
+
+
+# Incorporate the wshds2c feature class with the slope using Zonal Stats as Table,
+
+where_clause= "WSHDS2C_ID = 291 OR WSHDS2C_ID = 313 OR WSHDS2C_ID = 525"
+arcpy.Select_analysis(os.path.join(gdb,"Spatial_Decisions.gdb","wshds2c"),"out_class",where_clause)
+arcpy.ia.ZonalStatisticsAsTable("out_class","WSHDS2C_ID","Slope","tblWatershedSlope","", "MEAN")
+
+with arcpy.da.SearchCursor("tblWatershedSlope",["WSHDS2C_ID","MEAN"]) as cursor:
+    for row in cursor:
+        print("The Average slope of WSHDS2C_ID:",row[0],"is",row[1],"degrees")
+
+
+#  Deleting unwanted files
+print ("deleting unwanted files. . .")
+arcpy.Delete_management(os.path.join(gdb,"Assignment04.gdb","tblZonalStats2"))
+arcpy.Delete_management(os.path.join(gdb,"Assignment04.gdb","out_class"))
+
+
+#  Final Message
+arcpy.AddMessage("Assignment 4 was successful")
