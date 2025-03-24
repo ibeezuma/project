@@ -1,0 +1,138 @@
+'''
+Author: Ibe Ezuma
+Date:   November 18, 2023
+Purpose: To support the mapping initiatives of the BC Wildfire Service
+'''
+
+#  import Modules
+
+print("importing modules. . .")
+import arcpy, os,sys
+
+#  Set up path variables
+root = sys.path[0]
+literalPath=r"C:\Users\ibeez\Desktop\GEOS456\pythonProject"
+gdb=os.path.join(root, "Assignment05_Data")
+
+#  Set environments (workspace, overwriteOutput)
+arcpy.env.workspace = gdb
+arcpy.env.overwriteOutput = True
+
+
+Indian_Reserve_Name = arcpy.GetParameterAsText(0)
+Indian_Reserve_Features=arcpy.GetParameterAsText(1)
+Fire_Points=arcpy.GetParameterAsText(2)
+Fire_Polygons=arcpy.GetParameterAsText(3)
+Road_Features=arcpy.GetParameterAsText(4)
+Lake_Features=arcpy.GetParameterAsText(5)
+GDB_and_PDF_Location = arcpy.GetParameterAsText(6)
+APRX_File=arcpy.GetParameterAsText(7)
+
+irgd=Indian_Reserve_Name+".gdb"
+
+#  creating file geodatabase
+arcpy.AddMessage("creating file geodatabase. . .")
+arcpy.CreateFileGDB_management(gdb,irgd,"CURRENT")
+
+#  Setting Spatial reference
+sr=arcpy.SpatialReference(4269)
+arcpy.env.workspace = gdb
+#  Creating feature datasets
+arcpy.AddMessage("creating feature datasets. . .")
+arcpy.CreateFeatureDataset_management(os.path.join(gdb,irgd),"Base",sr)
+arcpy.CreateFeatureDataset_management(os.path.join(gdb,irgd),"Fire",sr)
+
+#  Selecting boundary and exporting
+arcpy.AddMessage("selecting boundary and exporting. . .")
+where = ''' "NGLSHNM" = '{0}' '''.format(Indian_Reserve_Name)
+arcpy.Select_analysis(Indian_Reserve_Features,os.path.join(gdb,irgd,"Base","ReserveBndry"),where)
+ReserveBndry=os.path.join(gdb,irgd,"Base","ReserveBndry")
+
+#  Exporting selected features
+arcpy.AddMessage("exporting selected features. . .")
+fpt=arcpy.SelectLayerByLocation_management(Fire_Points, "INTERSECT", ReserveBndry, None, "NEW_SELECTION", "NOT_INVERT")
+arcpy.FeatureClassToFeatureClass_conversion(fpt, os.path.join(irgd,"Fire"),"FirePoints")
+fpt=os.path.join(gdb,irgd,"Fire","FirePoints")
+
+fpy=arcpy.SelectLayerByLocation_management(Fire_Polygons, "INTERSECT", ReserveBndry, None, "NEW_SELECTION", "NOT_INVERT")
+arcpy.FeatureClassToFeatureClass_conversion(fpy, os.path.join(irgd,"Fire"), "FirePolys")
+fpy =os.path.join(gdb,irgd,"Fire","FirePolys")
+
+rf=arcpy.SelectLayerByLocation_management(Road_Features, "INTERSECT", ReserveBndry, None, "NEW_SELECTION", "NOT_INVERT")
+arcpy.FeatureClassToFeatureClass_conversion(rf,os.path.join(irgd,"Base"),"Roads")
+rd=os.path.join(gdb,irgd,"Base","Roads")
+
+lf=arcpy.SelectLayerByLocation_management(Lake_Features, "INTERSECT", ReserveBndry, None, "NEW_SELECTION", "NOT_INVERT")
+arcpy.FeatureClassToFeatureClass_conversion(lf,os.path.join(irgd,"Base"),"Lakes")
+lf=os.path.join(gdb,irgd,"Base","Lakes")
+
+arcpy.AddMessage(" Part A Done!!!!")
+
+#Part B
+
+arcpy.AddMessage("creating layer files. . .")
+arcpy.MakeFeatureLayer_management(ReserveBndry,"Reserve_Bndry")
+arcpy.SaveToLayerFile_management("Reserve_Bndry", "ReserveBndry")
+
+arcpy.MakeFeatureLayer_management(fpt,"Fire_Points")
+arcpy.SaveToLayerFile_management("Fire_Points", "FirePoints")
+
+arcpy.MakeFeatureLayer_management(fpy,"Fire_Polygons")
+arcpy.SaveToLayerFile_management("Fire_Polygons", "FirePolygons")
+
+arcpy.MakeFeatureLayer_management(rd,"Road_Features")
+arcpy.SaveToLayerFile_management("Road_Features", "Roads")
+
+arcpy.MakeFeatureLayer_management(lf,"Lake_Features")
+arcpy.SaveToLayerFile_management("Lake_Features", "Lakes")
+
+aprx = arcpy.mp.ArcGISProject(APRX_File)
+mp = aprx.listMaps("Assignment05 Map")[0]
+
+lyrPath=[]
+
+for l in arcpy.ListFiles("*.lyrx"):
+    path=arcpy.Describe(l)
+    fp=os.path.join(gdb,path.basename+".lyrx")
+    lyrPath.append(fp)
+
+arcpy.AddMessage("adding layers to map. . .")
+
+for l in lyrPath:
+    if l ==os.path.join(gdb,"ReserveBndry.lyrx"):
+        m = arcpy.mp.LayerFile(l)
+        mp.addLayer(m,"BOTTOM")
+    else:
+        m = arcpy.mp.LayerFile(l)
+        mp.addLayer(m,"TOP")
+
+arcpy.AddMessage("adding basemap. . .")
+mp.addBasemap("Topographic")
+
+aprx.saveACopy(os.path.join(gdb,"Assignment05_Updated.aprx"))
+
+
+lyt = aprx.listLayouts("Assignment05 Layout")[0]
+mf = lyt.listElements("MAPFRAME_ELEMENT")[0]
+Desc=arcpy.Describe(os.path.join(gdb,irgd,"Base","ReserveBndry"))
+ext=Desc.extent
+mf.camera.setExtent(ext)
+mt = lyt.listElements("TEXT_ELEMENT")[0]
+mt.text = Indian_Reserve_Name+"Fires"
+
+arcpy.AddMessage("exporting PDF. . .")
+lyt = aprx.listLayouts()[0]
+lyt.exportToPDF = (os.path.join(GDB_and_PDF_Location,"{}Fires 8.5x11 Landscape.pdf".format(Indian_Reserve_Name)))
+
+arcpy.AddMessage("removing layers from map. . .")
+for l in mp.listLayers("Assignment05 Map"):
+    mp.removeLayer(l)
+
+arcpy.AddMessage("deleting layer files. . .")
+
+arcpy.env.workspace =gdb
+arcpy.Delete_management("*.lyrx")
+
+aprx.saveACopy(os.path.join(gdb,"Assignment05_Updated.aprx"))
+
+arcpy.AddMessage(" Part B Done!!!!")
